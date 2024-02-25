@@ -218,6 +218,42 @@ async function handleEvent(event) {
         ],
       })
     }
+
+    // 查單
+    // "全部訂單"
+    if (userMessage === "全部訂單") {
+    }
+
+    // "訂單 D1 A"
+    if (userMessage.startsWith("訂單")) {
+      const re = /^\s*訂單\s*D[1-5]\s*[A|B]\s*$/i
+      const formatedMessage = userMessage.toUpperCase().replaceAll(" ", "")
+      const date = formatedMessage.slice(2, 4)
+      const group = formatedMessage.slice(-1)
+      const sheetTitle = `${date}_${group}`
+
+      const sheet = doc.sheetsByTitle[sheetTitle]
+      if (!sheet) throw new Error(`${sheetTitle} 尚未開始`)
+
+      await sheet.loadHeaderRow(4)
+
+      const rows = await sheet.getRows()
+      const row = rows.find((i) => i.get("id") === userId)
+
+      const amountInSheet = row.get("數量")
+
+      const replyMessage = `${displayName} 的 ${date} ${group} 訂單: ${amountInSheet}`
+
+      return client.replyMessage({
+        replyToken,
+        messages: [
+          {
+            type: "text",
+            text: replyMessage,
+          },
+        ],
+      })
+    }
   } catch (err) {
     return client.replyMessage({
       replyToken,
