@@ -222,6 +222,91 @@ async function handleEvent(event) {
     // 查單
     // "全部訂單"
     if (userMessage === "全部訂單") {
+      let allOrderObj = {}
+
+      const sheets = doc.sheetsByIndex.filter((i) => i.title !== "demo")
+      for (const sheet of sheets) {
+        const sheetTitle = sheet.title
+        const date = sheetTitle.slice(0, 2)
+        const group = sheetTitle.slice(-1)
+
+        await sheet.loadCells("A1:B2")
+
+        sheet.loadHeaderRow(4)
+
+        const descriptionInSheet = sheet.getCellByA1("A2").value
+
+        const rows = await sheet.getRows()
+        const row = rows.find((i) => i.get("id") === userId)
+        if (!row) continue
+
+        const amountInSheet = row.get("數量")
+        const priceInSheet = row.get("價格")
+
+        allOrderObj = allOrderObj[date]
+          ? {
+              ...allOrderObj,
+              [date]: {
+                ...allOrderObj[date],
+                [group]: {
+                  description: descriptionInSheet,
+                  amount: amountInSheet,
+                  price: priceInSheet,
+                },
+              },
+            }
+          : {
+              ...allOrderObj,
+              [date]: {
+                [group]: {
+                  description: descriptionInSheet,
+                  amount: amountInSheet,
+                  price: priceInSheet,
+                },
+              },
+            }
+      }
+
+      if (Object.keys(allOrderObj) === 0)
+        throw new Error(`${displayName} 還沒有任何訂單`)
+
+      // Object.formEntries() 將 [key, value] 轉為 object
+      // Object.entries() 將 object 轉為 array
+      const formatedOrderObj = Object.fromEntries(
+        Object.entries(allOrderObj).sort(
+          ([a], [b]) => a.slice(-1) - b.slice(-1)
+        )
+      )
+
+      let result = ""
+      for (const date in formatedOrderObj) {
+        // const innerObj = formatedOrderObj[date]
+        const innerObj = Object.fromEntries(
+          Object.entries(formatedOrderObj[date]).sort((a, b) =>
+            a[0].localeCompare(b[0])
+          )
+        )
+        for (const group in innerObj) {
+          // result += `🛒 ${date} 的 ${group} + ${
+          //   formatedOrderObj[date][group].amount < 10
+          //     ? `0${formatedOrderObj[date][group].amount}`
+          //     : formatedOrderObj[date][group].amount
+          // } 💰$${formatedOrderObj[date][group].price}\n`
+          result += `🛒 [${date} ${group}] ${formatedOrderObj[date][group].description}\n\t\t數量 : ${formatedOrderObj[date][group].amount}\t\t$${formatedOrderObj[date][group].price}\n\n`
+        }
+      }
+
+      const replyMessage = `${displayName} 的訂單 :\n${result.slice(0, -2)}`
+
+      return client.replyMessage({
+        replyToken,
+        messages: [
+          {
+            type: "text",
+            text: replyMessage,
+          },
+        ],
+      })
     }
 
     // "訂單 D1 A"
