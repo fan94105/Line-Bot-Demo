@@ -165,6 +165,7 @@ async function handleEvent(event) {
       const group = formatedMessage.at(2)
       const sheetTitle = `${date}_${group}`
       const amount = +formatedMessage.slice(3)
+      let currentAmount
 
       if (amount === 0) throw new Error("數量不可為零")
 
@@ -181,39 +182,68 @@ async function handleEvent(event) {
 
       await sheet.loadHeaderRow(4)
 
-      const unitPrice = sheet.getCellByA1("B2").value
-
-      const rows = await sheet.getRows()
+      const rows = await sheet.getRows({ limit: 50 })
       const existRow = rows.find((i) => i.get("id") === userId)
       if (existRow) {
-        const originalAmount = +existRow.get("數量")
-        const updatedAmount = originalAmount + amount
+        const rowNumber = existRow.rowNumber
+        const amountInSheet = +existRow.get("數量")
+        const updatedAmount = amountInSheet + amount
+
+        // 若數量為零 刪除該筆資料
+        if (updatedAmount === 0) {
+          // 清除 row
+          await existRow.delete()
+
+          const replyMessage = `${displayName} : 已將 ${date} ${group} 從訂單中移除`
+
+          return client.replyMessage({
+            replyToken,
+            messages: [
+              {
+                type: "text",
+                text: replyMessage,
+              },
+            ],
+          })
+        }
 
         if (updatedAmount < 0)
-          throw new Error(`數量不可小於零，目前數量 ${originalAmount}`)
+          throw new Error(
+            `${displayName} : 數量不可小於零，目前數量 ${amountInSheet} 組。`
+          )
 
         existRow.set("數量", updatedAmount)
-        existRow.set("價格", updatedAmount * unitPrice)
+        existRow.set("價格", `=C${rowNumber}*$B$2`)
+
+        currentAmount = updatedAmount
         // save changes
         await existRow.save()
       } else {
         // 新增 row
-        await sheet.addRow({
+        const newRow = await sheet.addRow({
           id: userId,
           名稱: displayName,
           數量: amount,
-          價格: amount * unitPrice,
         })
+
+        const newRowNumber = newRow.rowNumber
+
+        newRow.set("價格", `=C${newRowNumber}*$B$2`)
+
+        await newRow.save()
+
+        currentAmount = amount
       }
+      const replyMessage = `${displayName} : ${date} ${group}${
+        amount > 0 ? `+${amount}` : amount
+      }，目前數量 ${currentAmount} 組。`
 
       return client.replyMessage({
         replyToken,
         messages: [
           {
             type: "text",
-            text: `${displayName}:${date} ${group}${
-              amount > 0 ? `+${amount}` : amount
-            }`,
+            text: replyMessage,
           },
         ],
       })
@@ -236,7 +266,7 @@ async function handleEvent(event) {
 
         const descriptionInSheet = sheet.getCellByA1("A2").value
 
-        const rows = await sheet.getRows()
+        const rows = await sheet.getRows({ limit: 50 })
         const row = rows.find((i) => i.get("id") === userId)
         if (!row) continue
 
@@ -322,7 +352,7 @@ async function handleEvent(event) {
 
       await sheet.loadHeaderRow(4)
 
-      const rows = await sheet.getRows()
+      const rows = await sheet.getRows({ limit: 50 })
       const row = rows.find((i) => i.get("id") === userId)
 
       const amountInSheet = row.get("數量")
