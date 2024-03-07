@@ -74,7 +74,10 @@ async function handleEvent(event) {
 
       // 先設定 header row 後才能操作後續的 row
       await newSheet.setHeaderRow(["狀態", "日期", "商品名", "單價", "描述"], 1)
-      await newSheet.setHeaderRow(["id", "客戶名", "數量", "價格"], 4)
+      await newSheet.setHeaderRow(
+        ["id", "客戶名", "數量", "價格", "收款(✅/❌)"],
+        4
+      )
 
       await newSheet.loadHeaderRow(1)
       await newSheet.addRow({
@@ -162,6 +165,63 @@ async function handleEvent(event) {
 
           replyMessage = `${sheetTitle} 訂單目前為關閉狀態。`
         }
+
+        return client.replyMessage({
+          replyToken,
+          messages: [
+            {
+              type: "text",
+              text: replyMessage,
+            },
+          ],
+        })
+      }
+
+      // 查看特定使用者的所有訂單 "check-[customer]"
+      if (userMessage.startsWith("check")) {
+        const re = /^check\s*-[^-]*[a-zA-Z0-9\u4e00-\u9fa5]+[^-]*$/
+        if (!re.test(userMessage))
+          throw new Error(`❗查詢特定客戶訂單:\n『 check-客戶名稱 』`)
+
+        const customerName = userMessage.trim().split("-")[1]
+
+        let result = ""
+
+        for (const sheet of allSheets) {
+          await sheet.loadHeaderRow(1)
+          const infoRows = await sheet.getRows({ limit: 1 })
+
+          const sheetTitle = sheet.title
+          const productName = infoRows[0]?.get("商品名")
+          if (!productName) continue
+
+          await sheet.loadHeaderRow(4)
+          const rows = await sheet.getRows({ limit: 30 })
+          const existRow = rows.find(
+            (row) => row.get("客戶名") === customerName
+          )
+          if (!existRow) continue
+
+          const amountInSheet = existRow.get("數量")
+          const priceInSheet = existRow.get("價格")
+          const isCollection = existRow.get("收款") === "✅" ? true : false
+
+          const displayProductName =
+            productName.length > 15
+              ? `${productName.substring(0, 15)}...`
+              : productName
+
+          result += `🛒 [${sheetTitle}]\t\t${
+            isCollection ? "已付款" : "未付款"
+          }\n\t\t${displayProductName}\n\t\t數量 : ${amountInSheet}\t\t價格 : ${priceInSheet}\n\n`
+        }
+        if (result.length === 0)
+          throw new Error(`❗${customerName} 沒有任何訂單。`)
+
+        const replyMessage = `${customerName} 的所有訂單 :\n${result.slice(
+          0,
+          -2
+        )}`
 
         return client.replyMessage({
           replyToken,
@@ -262,6 +322,7 @@ async function handleEvent(event) {
             id: userId,
             客戶名: displayName,
             數量: amount,
+            收款: "❌",
           })
 
           const newRowNumber = newRow.rowNumber
@@ -301,10 +362,13 @@ async function handleEvent(event) {
             if (!row) return
             const customer = row.get("客戶名")
             const amountInSheet = row.get("數量")
+            const isCollection = row.get("收款") === "✅" ? true : false
 
             result += `${
               i < 9 ? `0${i + 1}` : i + 1
-            }. ${customer}+${amountInSheet}\n`
+            }. ${customer}+${amountInSheet} ${
+              isCollection ? "已付款" : "未付款"
+            }\n`
           })
 
           if (result === "") result = "空空如也..."
@@ -329,8 +393,12 @@ async function handleEvent(event) {
             throw new Error(`❗${displayName} : 沒有 ${formatedMessage} 訂單。`)
 
           const amountInSheet = targetRow.get("數量")
+          const isCollection = targetRow.get("收款") === "✅" ? true : false
 
           const replyMessage = `${displayName} :\n🛒 ${formatedMessage}+${amountInSheet}。`
+          // const replyMessage = `${displayName} :\n🛒 ${formatedMessage}+${amountInSheet} ${
+          //   isCollection ? "已付款" : "未付款"
+          // }。`
 
           return client.replyMessage({
             replyToken,
@@ -361,13 +429,16 @@ async function handleEvent(event) {
           if (!existRow) continue
 
           const amountInSheet = existRow.get("數量")
+          const isCollection = existRow.get("收款") === "✅" ? true : false
 
           const displayProductName =
             productName.length > 15
               ? `${productName.substring(0, 15)}...`
               : productName
 
-          result += `🛒 [${sheetTitle}] ${displayProductName}\n\t\t數量 : ${amountInSheet}\n\n`
+          result += `🛒 [${sheetTitle}] ${displayProductName}\n\t\t數量 : ${amountInSheet}\t\t${
+            isCollection ? "已付款" : "未付款"
+          }\n\n`
         }
         const replyMessage = `${displayName} 的所有訂單 :\n${result.slice(
           0,
