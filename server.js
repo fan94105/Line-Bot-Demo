@@ -26,9 +26,6 @@ const serviceAccountAuth = new JWT({
   ],
 })
 
-// 關閉編輯的 sheet
-const closedSheets = []
-
 async function handleEvent(event) {
   // ignore non-text-message event
   if (event.type !== "message" || event.message.type !== "text") {
@@ -36,8 +33,10 @@ async function handleEvent(event) {
   }
 
   const userMessage = event.message.text
-  const sourceType = event.source.type
-  const groupId = event.source?.groupId
+  const sourceType = event.source.type // 'user' | 'group'
+  const date = new Date(event.timestamp).toLocaleDateString()
+  // const groupId = event.source?.groupId
+  const groupId = "C1bc0a1b1d91033d5e49aa9b3ca55b751"
   const userId = event.source.userId
   const replyToken = event.replyToken
   try {
@@ -48,6 +47,8 @@ async function handleEvent(event) {
     )
     // Load basic document props and child sheets
     await doc.loadInfo()
+
+    const allSheets = doc.sheetsByIndex
 
     let profile
     if (groupId) {
@@ -61,140 +62,275 @@ async function handleEvent(event) {
     // 判斷是否為管理員
     const isOwner = true
 
-    // 管理員創建新的 sheet
-    // "create-D1-A-description-100"
-    if (isOwner && userMessage.startsWith("create")) {
-      // 檢查訊息格式
-      const re = /^create-D[1-5]-[A|B]-[\w\W][^-]+-\d+$/i
-      if (!re.test(userMessage))
-        throw new Error('請依格式輸入:\n"create-D1-A-描述-單價"')
-
-      const [mode, date, group, description, price] = userMessage
-        .toUpperCase()
-        .split("-")
-      const newSheetTitle = `${date}_${group}`
-
+    async function createNewSheet(title, productName, unitPrice, description) {
       // 確認 sheet 是否已存在
-      const existSheet = doc.sheetsByTitle[newSheetTitle]
-      if (existSheet) throw new Error(`❗工作表 ${newSheetTitle} 已存在❗`)
+      const existSheet = doc.sheetsByTitle[title]
+      if (existSheet) throw new Error(`❗${title} 訂單已存在。`)
 
       // 創建新的 sheet
       const newSheet = await doc.addSheet({
-        title: newSheetTitle,
+        title,
       })
 
       // 先設定 header row 後才能操作後續的 row
-      await newSheet.setHeaderRow(["組合", "單價"], 1)
-      await newSheet.setHeaderRow(["id", "名稱", "數量", "價格"], 4)
+      await newSheet.setHeaderRow(["狀態", "日期", "商品名", "單價", "描述"], 1)
+      await newSheet.setHeaderRow(["id", "客戶名", "數量", "價格"], 4)
 
       await newSheet.loadHeaderRow(1)
       await newSheet.addRow({
-        組合: description,
-        單價: price,
+        狀態: "開啟",
+        日期: date,
+        商品名: productName,
+        單價: unitPrice,
+        描述: description,
       })
 
-      return client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: `創建 ${newSheetTitle}:${description}`,
-          },
-        ],
-      })
+      return
     }
 
-    // 管理員關閉 sheet
-    if (isOwner && userMessage.startsWith("close")) {
-      const re = /^close-D[1-5]-[A|B]$/i
-      if (!re.test(userMessage)) throw new Error('請依格式輸入:\n"close-D1-A"')
+    //////////////////////////////////////////////////////////////
 
-      const [mode, date, group] = userMessage.toUpperCase().split("-")
-      const sheetTitle = `${date}_${group}`
+    // 管理員操作
+    if (isOwner && sourceType === "group") {
+      // 創建新訂單 "create-[sheetTitle]-[productName]-[unitPrice]-[description]"
+      if (userMessage.startsWith("create")) {
+        const re =
+          /create-[^-]*[a-zA-Z0-9\u4e00-\u9fa5]+[^-]*-[^-]*[a-zA-Z0-9\u4e00-\u9fa5]+[^-]*-\d+-[^-]*[a-zA-Z0-9\u4e00-\u9fa5]+[^-]*$/
+        if (!re.test(userMessage))
+          throw new Error("❗創建訂單:\n『 create-訂單名稱-商品名-單價-描述 』")
 
-      // 確認 sheet 是否已關閉
-      const isClosed = closedSheets.includes(sheetTitle)
-      if (isClosed) throw new Error(`${sheetTitle} 已關閉`)
+        const userMessageArr = userMessage.trim().split("-")
+        const sheetTitle = userMessageArr[1].toUpperCase().replaceAll(" ", "")
+        const productName = userMessageArr[2].trim()
+        const unitPrice = userMessageArr[3]
+        const description = userMessageArr[4]
 
-      closedSheets.push(sheetTitle)
-      console.log(closedSheets)
+        await createNewSheet(sheetTitle, productName, unitPrice, description)
 
-      return client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: `已將 ${sheetTitle} 關閉`,
-          },
-        ],
-      })
+        const replyMessage = `📢 ${productName} 開始登記啦!\n\n${description}\n\n每組價格 ${unitPrice} 元\n\n需要的夥伴請輸入:\t『 ${sheetTitle}+1 』`
+
+        // 發送群組訊息
+        // return client.pushMessage({
+        //   to: groupId,
+        //   messages: [
+        //     {
+        //       type: "text",
+        //       text: replyMessage,
+        //     },
+        //   ],
+        // })
+        return client.replyMessage({
+          replyToken,
+          messages: [
+            {
+              type: "text",
+              text: replyMessage,
+            },
+          ],
+        })
+      }
+
+      // 切換訂單狀態 "toggle-[sheetTitle]"
+      if (userMessage.startsWith("toggle")) {
+        const re = /^toggle\s*-[^-]*[a-zA-Z0-9\u4e00-\u9fa5]+[^-]*$/
+        if (!re.test(userMessage))
+          throw new Error("❗切換訂單狀態:\n『 toggle-訂單名稱 』")
+
+        const userMessageArr = userMessage.toUpperCase().trim().split("-")
+        const sheetTitle = userMessageArr[1].replaceAll(" ", "")
+
+        const sheet = doc.sheetsByTitle[sheetTitle]
+
+        await sheet.loadHeaderRow(1)
+
+        const infoRows = await sheet.getRows({ limit: 1 })
+
+        const sheetStatus = infoRows[0].get("狀態")
+
+        let replyMessage
+        if (sheetStatus === "關閉") {
+          infoRows[0].set("狀態", "開啟")
+
+          await infoRows[0].save()
+
+          replyMessage = `${sheetTitle} 訂單目前為開啟狀態。`
+        }
+        if (sheetStatus === "開啟") {
+          infoRows[0].set("狀態", "關閉")
+
+          await infoRows[0].save()
+
+          replyMessage = `${sheetTitle} 訂單目前為關閉狀態。`
+        }
+
+        return client.replyMessage({
+          replyToken,
+          messages: [
+            {
+              type: "text",
+              text: replyMessage,
+            },
+          ],
+        })
+      }
     }
 
-    // 管理員將關閉的 sheet 開啟
-    if (isOwner && userMessage.startsWith("open")) {
-      const re = /^open-D[1-5]-[A|B]$/i
-      if (!re.test(userMessage)) throw new Error('請依格式輸入:\n"open-D1-A"')
+    //////////////////////////////////////////////////////////////
 
-      const [mode, date, group] = userMessage.toUpperCase().split("-")
-      const sheetTitle = `${date}_${group}`
+    //////////////////////////////////////////////////////////////
 
-      // 確認 sheet 是否已關閉
-      const isClosed = closedSheets.includes(sheetTitle)
-      if (!isClosed) throw new Error(`${sheetTitle} 已開啟`)
-
-      const idx = closedSheets.indexOf(sheetTitle)
-      closedSheets.splice(idx, 1)
-      console.log(closedSheets)
-
-      return client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: `已將 ${sheetTitle} 開啟`,
-          },
-        ],
-      })
-    }
-
-    // 使用者下單
-    const orderRe = /^D[1-5]\s*[A|B]\s*[+|-]\s*\d+$/i
-    if (orderRe.test(userMessage)) {
+    // 一般操作
+    if (sourceType === "group") {
       const formatedMessage = userMessage.toUpperCase().replaceAll(" ", "")
-      const date = formatedMessage.slice(0, 2)
-      const group = formatedMessage.at(2)
-      const sheetTitle = `${date}_${group}`
-      const amount = +formatedMessage.slice(3)
-      let currentAmount
 
-      if (amount === 0) throw new Error("數量不可為零")
+      // 下單 "[sheetTitle]+1"
+      const orderRe = /^\s*[a-zA-Z0-9\u4e00-\u9fa5]+[^-+]*\s*[+|-]\s*\d+\s*$/
+      if (orderRe.test(userMessage)) {
+        // const [sheetTitle] = formatedMessage.includes("+")
+        //   ? formatedMessage.split("+")
+        //   : formatedMessage.split("-")
+        let sheetTitle, amount
+        if (formatedMessage.includes("+")) {
+          sheetTitle = formatedMessage.split("+")[0]
+          amount = +formatedMessage.split("+")[1]
+        }
+        if (formatedMessage.includes("-")) {
+          sheetTitle = formatedMessage.split("-")[0]
+          amount = +formatedMessage.split("-")[1] * -1
+        }
 
-      // 取得指定 sheet
-      const sheet = doc.sheetsByTitle[sheetTitle]
-      if (!sheet) throw new Error(`${sheetTitle} 尚未開始`)
+        let currentAmount
 
-      // 確認 sheet 是否已關閉
-      const isClosed = closedSheets.includes(sheetTitle)
-      if (isClosed) throw new Error(`${sheetTitle} 已關閉`)
+        if (!amount) throw new Error(`❗${displayName} : 至少要下 1 筆訂單。`)
 
-      // loads range of cells into local cache
-      await sheet.loadCells()
+        // 取得 sheet
+        const sheet = doc.sheetsByTitle[sheetTitle]
+        if (!sheet)
+          throw new Error(`❗${displayName} : ${sheetTitle} 訂單不存在。`)
 
-      await sheet.loadHeaderRow(4)
+        const infoRows = await sheet.getRows({ limit: 1 })
 
-      const rows = await sheet.getRows({ limit: 50 })
-      const existRow = rows.find((i) => i.get("id") === userId)
-      if (existRow) {
-        const rowNumber = existRow.rowNumber
-        const amountInSheet = +existRow.get("數量")
-        const updatedAmount = amountInSheet + amount
+        // 確認 sheet 狀態
+        const sheetStatus = infoRows[0]?.get("狀態")
+        if (sheetStatus !== "開啟")
+          throw new Error(`❗${displayName} : ${sheetTitle} 訂單已關閉。`)
 
-        // 若數量為零 刪除該筆資料
-        if (updatedAmount === 0) {
-          // 清除 row
-          await existRow.delete()
+        await sheet.loadHeaderRow(4)
 
-          const replyMessage = `${displayName} : 已將 ${date} ${group} 從訂單中移除`
+        const rows = await sheet.getRows({ limit: 30 })
+        const existRow = rows.find((row) => row.get("id") === userId)
+        if (existRow) {
+          const existRowNumber = existRow.rowNumber
+          const amountInSheet = +existRow.get("數量")
+          const updatedAmount = amountInSheet + amount
+
+          if (updatedAmount === 0) {
+            // 清除 row
+            await existRow.delete()
+
+            const replyMessage = `❗${displayName} : 已刪除 ${sheetTitle} 訂單。`
+
+            return client.replyMessage({
+              replyToken,
+              messages: [
+                {
+                  type: "text",
+                  text: replyMessage,
+                },
+              ],
+            })
+          }
+
+          if (updatedAmount < 0)
+            throw new Error(
+              `❗${displayName} : 數量不可小於零，目前 ${sheetTitle} 訂單數量 ${amountInSheet}。`
+            )
+
+          existRow.set("數量", updatedAmount)
+          existRow.set("價格", `=C${existRowNumber}*$D$2`)
+
+          // save changes
+          await existRow.save()
+
+          currentAmount = updatedAmount
+        } else {
+          if (amount < 0)
+            throw new Error(`❗${displayName} : 至少要下 1 筆訂單。`)
+
+          // 新增 row
+          const newRow = await sheet.addRow({
+            id: userId,
+            客戶名: displayName,
+            數量: amount,
+          })
+
+          const newRowNumber = newRow.rowNumber
+
+          newRow.set("價格", `=C${newRowNumber}*$D$2`)
+
+          await newRow.save()
+
+          currentAmount = amount
+        }
+
+        const replyMessage = `${displayName} :\n${sheetTitle}${
+          amount > 0 ? "+" : "-"
+        }${Math.abs(amount)}，總共 ${currentAmount} 組。`
+
+        return client.replyMessage({
+          replyToken,
+          messages: [
+            {
+              type: "text",
+              text: replyMessage,
+            },
+          ],
+        })
+      }
+
+      // 查看特定訂單 "[sheetTitle]"
+      const specificSheet = doc.sheetsByTitle[formatedMessage]
+      if (specificSheet) {
+        await specificSheet.loadHeaderRow(4)
+
+        const rows = await specificSheet.getRows({ limit: 30 })
+
+        if (isOwner) {
+          let result = ""
+          rows.forEach((row, i) => {
+            if (!row) return
+            const customer = row.get("客戶名")
+            const amountInSheet = row.get("數量")
+
+            result += `${
+              i < 9 ? `0${i + 1}` : i + 1
+            }. ${customer}+${amountInSheet}\n`
+          })
+
+          if (result === "") result = "空空如也..."
+
+          const replyMessage = `${formatedMessage} 訂單 :\n${result.slice(
+            0,
+            -1
+          )}`
+
+          return client.replyMessage({
+            replyToken,
+            messages: [
+              {
+                type: "text",
+                text: replyMessage,
+              },
+            ],
+          })
+        } else {
+          const targetRow = rows.find((row) => row.get("id") === userId)
+          if (!targetRow)
+            throw new Error(`❗${displayName} : 沒有 ${formatedMessage} 訂單。`)
+
+          const amountInSheet = targetRow.get("數量")
+
+          const replyMessage = `${displayName} :\n🛒 ${formatedMessage}+${amountInSheet}。`
 
           return client.replyMessage({
             replyToken,
@@ -206,169 +342,51 @@ async function handleEvent(event) {
             ],
           })
         }
-
-        if (updatedAmount < 0)
-          throw new Error(
-            `${displayName} : 數量不可小於零，目前數量 ${amountInSheet} 組。`
-          )
-
-        existRow.set("數量", updatedAmount)
-        existRow.set("價格", `=C${rowNumber}*$B$2`)
-
-        currentAmount = updatedAmount
-        // save changes
-        await existRow.save()
-      } else {
-        // 新增 row
-        const newRow = await sheet.addRow({
-          id: userId,
-          名稱: displayName,
-          數量: amount,
-        })
-
-        const newRowNumber = newRow.rowNumber
-
-        newRow.set("價格", `=C${newRowNumber}*$B$2`)
-
-        await newRow.save()
-
-        currentAmount = amount
-      }
-      const replyMessage = `${displayName} : ${date} ${group}${
-        amount > 0 ? `+${amount}` : amount
-      }，目前數量 ${currentAmount} 組。`
-
-      return client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: replyMessage,
-          },
-        ],
-      })
-    }
-
-    // 查單
-    // "全部訂單"
-    if (userMessage === "全部訂單") {
-      let allOrderObj = {}
-
-      const sheets = doc.sheetsByIndex.filter((i) => i.title !== "demo")
-      for (const sheet of sheets) {
-        const sheetTitle = sheet.title
-        const date = sheetTitle.slice(0, 2)
-        const group = sheetTitle.slice(-1)
-
-        await sheet.loadCells("A1:B2")
-
-        sheet.loadHeaderRow(4)
-
-        const descriptionInSheet = sheet.getCellByA1("A2").value
-
-        const rows = await sheet.getRows({ limit: 50 })
-        const row = rows.find((i) => i.get("id") === userId)
-        if (!row) continue
-
-        const amountInSheet = row.get("數量")
-        const priceInSheet = row.get("價格")
-
-        allOrderObj = allOrderObj[date]
-          ? {
-              ...allOrderObj,
-              [date]: {
-                ...allOrderObj[date],
-                [group]: {
-                  description: descriptionInSheet,
-                  amount: amountInSheet,
-                  price: priceInSheet,
-                },
-              },
-            }
-          : {
-              ...allOrderObj,
-              [date]: {
-                [group]: {
-                  description: descriptionInSheet,
-                  amount: amountInSheet,
-                  price: priceInSheet,
-                },
-              },
-            }
       }
 
-      if (Object.keys(allOrderObj) === 0)
-        throw new Error(`${displayName} 還沒有任何訂單`)
+      // 查看個人所有訂單 "我的訂單"
+      if (formatedMessage === "我的訂單") {
+        let result = ""
+        for (const sheet of allSheets) {
+          await sheet.loadHeaderRow(1)
+          const infoRows = await sheet.getRows({ limit: 1 })
 
-      // Object.formEntries() 將 [key, value] 轉為 object
-      // Object.entries() 將 object 轉為 array
-      const formatedOrderObj = Object.fromEntries(
-        Object.entries(allOrderObj).sort(
-          ([a], [b]) => a.slice(-1) - b.slice(-1)
-        )
-      )
+          const sheetTitle = sheet.title
+          const productName = infoRows[0]?.get("商品名")
+          if (!productName) continue
 
-      let result = ""
-      for (const date in formatedOrderObj) {
-        // const innerObj = formatedOrderObj[date]
-        const innerObj = Object.fromEntries(
-          Object.entries(formatedOrderObj[date]).sort((a, b) =>
-            a[0].localeCompare(b[0])
-          )
-        )
-        for (const group in innerObj) {
-          // result += `🛒 ${date} 的 ${group} + ${
-          //   formatedOrderObj[date][group].amount < 10
-          //     ? `0${formatedOrderObj[date][group].amount}`
-          //     : formatedOrderObj[date][group].amount
-          // } 💰$${formatedOrderObj[date][group].price}\n`
-          result += `🛒 [${date} ${group}] ${formatedOrderObj[date][group].description}\n\t\t數量 : ${formatedOrderObj[date][group].amount}\t\t$${formatedOrderObj[date][group].price}\n\n`
+          await sheet.loadHeaderRow(4)
+          const rows = await sheet.getRows({ limit: 30 })
+          const existRow = rows.find((row) => row.get("id") === userId)
+          if (!existRow) continue
+
+          const amountInSheet = existRow.get("數量")
+
+          const displayProductName =
+            productName.length > 15
+              ? `${productName.substring(0, 15)}...`
+              : productName
+
+          result += `🛒 [${sheetTitle}] ${displayProductName}\n\t\t數量 : ${amountInSheet}\n\n`
         }
+        const replyMessage = `${displayName} 的所有訂單 :\n${result.slice(
+          0,
+          -2
+        )}`
+
+        return client.replyMessage({
+          replyToken,
+          messages: [
+            {
+              type: "text",
+              text: replyMessage,
+            },
+          ],
+        })
       }
-
-      const replyMessage = `${displayName} 的訂單 :\n${result.slice(0, -2)}`
-
-      return client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: replyMessage,
-          },
-        ],
-      })
     }
 
-    // "訂單 D1 A"
-    if (userMessage.startsWith("訂單")) {
-      const re = /^\s*訂單\s*D[1-5]\s*[A|B]\s*$/i
-      const formatedMessage = userMessage.toUpperCase().replaceAll(" ", "")
-      const date = formatedMessage.slice(2, 4)
-      const group = formatedMessage.slice(-1)
-      const sheetTitle = `${date}_${group}`
-
-      const sheet = doc.sheetsByTitle[sheetTitle]
-      if (!sheet) throw new Error(`${sheetTitle} 尚未開始`)
-
-      await sheet.loadHeaderRow(4)
-
-      const rows = await sheet.getRows({ limit: 50 })
-      const row = rows.find((i) => i.get("id") === userId)
-
-      const amountInSheet = row.get("數量")
-
-      const replyMessage = `${displayName} 的 ${date} ${group} 訂單: ${amountInSheet}`
-
-      return client.replyMessage({
-        replyToken,
-        messages: [
-          {
-            type: "text",
-            text: replyMessage,
-          },
-        ],
-      })
-    }
+    //////////////////////////////////////////////////////////////
   } catch (err) {
     return client.replyMessage({
       replyToken,
@@ -380,16 +398,6 @@ async function handleEvent(event) {
       ],
     })
   }
-
-  return client.replyMessage({
-    replyToken,
-    messages: [
-      {
-        type: "text",
-        text: event.message.text,
-      },
-    ],
-  })
 }
 
 const app = express()
