@@ -60,7 +60,8 @@ async function handleEvent(event) {
     const { displayName } = profile
 
     // 判斷是否為管理員
-    const isManager = false
+    const isManager = userId === process.env.LINE_MANAGER_ID
+    // const isManager = false
 
     async function createNewSheet(title, productName, unitPrice, description) {
       // 確認 sheet 是否已存在
@@ -75,7 +76,7 @@ async function handleEvent(event) {
       // 先設定 header row 後才能操作後續的 row
       await newSheet.setHeaderRow(["狀態", "日期", "商品名", "單價", "描述"], 1)
       await newSheet.setHeaderRow(
-        ["id", "客戶名", "數量", "價格", "收款(✅/❌)"],
+        ["id", "客戶名", "數量", "價格", "收款(✅/❌)", "備註"],
         4
       )
 
@@ -206,15 +207,20 @@ async function handleEvent(event) {
           const priceInSheet = existRow.get("價格")
           const isCollection =
             existRow.get("收款(✅/❌)") === "✅" ? true : false
+          const commentsInSheet = existRow.get("備註")
 
           const displayProductName =
             productName.length > 15
               ? `${productName.substring(0, 15)}...`
               : productName
 
-          result += `🛒 [${sheetTitle}]\t\t${
-            isCollection ? "已付款" : "未付款"
-          }\n\t\t${displayProductName}\n\t\t數量 : ${amountInSheet}\t\t價格 : ${priceInSheet}\n\n`
+          result += commentsInSheet
+            ? `🛒 [${sheetTitle}]\t\t${
+                isCollection ? "已付款" : "未付款"
+              }\n\t\t商品 : ${displayProductName}\n\t\t數量 : ${amountInSheet}\n\t\t價格 : ${priceInSheet}\n\t\t備註 : ${commentsInSheet}\n\n`
+            : `🛒 [${sheetTitle}]\t\t${
+                isCollection ? "已付款" : "未付款"
+              }\n\t\t商品 : ${displayProductName}\n\t\t數量 : ${amountInSheet}\n\t\t價格 : ${priceInSheet}\n\n`
         }
         if (result.length === 0)
           throw new Error(`❗${customerName} 沒有任何訂單。`)
@@ -258,23 +264,24 @@ async function handleEvent(event) {
     if (sourceType === "group") {
       const formatedMessage = userMessage.toUpperCase().replaceAll(" ", "")
 
-      // 下單 "[sheetTitle]+1"
-      const orderRe = /^\s*[a-zA-Z0-9\u4e00-\u9fa5]+[^-+]*\s*[+|-]\s*\d+\s*$/
-      if (orderRe.test(userMessage)) {
-        // const [sheetTitle] = formatedMessage.includes("+")
-        //   ? formatedMessage.split("+")
-        //   : formatedMessage.split("-")
-        let sheetTitle, amount
-        if (formatedMessage.includes("+")) {
-          sheetTitle = formatedMessage.split("+")[0]
-          amount = +formatedMessage.split("+")[1]
-        }
-        if (formatedMessage.includes("-")) {
-          sheetTitle = formatedMessage.split("-")[0]
-          amount = +formatedMessage.split("-")[1] * -1
-        }
+      // 下單 "[sheetTitle]+1#[備註]"
+      const orderRe = /^(\s*[^+-\s]+\s*)([+-]\s*\d+\s*)(#[^#]+)?$/
+      if (formatedMessage.match(orderRe)) {
+        // let sheetTitle, amount
+        // if (formatedMessage.includes("+")) {
+        //   sheetTitle = formatedMessage.split("+")[0]
+        //   amount = +formatedMessage.split("+")[1]
+        // }
+        // if (formatedMessage.includes("-")) {
+        //   sheetTitle = formatedMessage.split("-")[0]
+        //   amount = +formatedMessage.split("-")[1] * -1
+        // }
 
-        let currentAmount
+        const sheetTitle = formatedMessage.match(orderRe)[1]
+        const amount = +formatedMessage.match(orderRe)[2]
+        const comments = formatedMessage.match(orderRe)[3]?.slice(1)
+
+        let currentAmount, currentComments
 
         if (!amount) throw new Error(`❗${displayName} : 至少要下 1 筆訂單。`)
 
@@ -298,6 +305,8 @@ async function handleEvent(event) {
           const existRowNumber = existRow.rowNumber
           const amountInSheet = +existRow.get("數量")
           const updatedAmount = amountInSheet + amount
+          const commentsInSheet = existRow.get("備註")
+          currentComments = commentsInSheet
 
           if (updatedAmount === 0) {
             // 清除 row
@@ -324,6 +333,11 @@ async function handleEvent(event) {
           existRow.set("數量", updatedAmount)
           existRow.set("價格", `=C${existRowNumber}*$D$2`)
 
+          if (comments) {
+            existRow.set("備註", comments)
+            currentComments = comments
+          }
+
           // save changes
           await existRow.save()
 
@@ -344,14 +358,23 @@ async function handleEvent(event) {
 
           newRow.set("價格", `=C${newRowNumber}*$D$2`)
 
+          if (comments) {
+            newRow.set("備註", comments)
+            currentComments = comments
+          }
+
           await newRow.save()
 
           currentAmount = amount
         }
 
-        const replyMessage = `${displayName} :\n${sheetTitle}${
-          amount > 0 ? "+" : "-"
-        }${Math.abs(amount)}，總共 ${currentAmount} 組。`
+        const replyMessage = currentComments
+          ? `${displayName} :\n${sheetTitle}${amount > 0 ? "+" : "-"}${Math.abs(
+              amount
+            )}，總共 ${currentAmount} 組。\n備註 : ${currentComments}`
+          : `${displayName} :\n${sheetTitle}${amount > 0 ? "+" : "-"}${Math.abs(
+              amount
+            )}，總共 ${currentAmount} 組。`
 
         return client.replyMessage({
           replyToken,
@@ -383,12 +406,15 @@ async function handleEvent(event) {
             const customer = row.get("客戶名")
             const amountInSheet = row.get("數量")
             const isCollection = row.get("收款(✅/❌)") === "✅" ? true : false
+            const commentsInSheet = row.get("備註")
 
-            result += `${
-              i < 9 ? `0${i + 1}` : i + 1
-            }. ${customer}+${amountInSheet} ${
-              isCollection ? "已付款" : "未付款"
-            }\n`
+            result += commentsInSheet
+              ? `${i < 9 ? `0${i + 1}` : i + 1}. ${customer}+${amountInSheet} ${
+                  isCollection ? "已付款" : "未付款"
+                }\n\t\t備註 : ${commentsInSheet}\n`
+              : `${i < 9 ? `0${i + 1}` : i + 1}. ${customer}+${amountInSheet} ${
+                  isCollection ? "已付款" : "未付款"
+                }\n`
           })
 
           if (result === "") result = "空空如也..."
@@ -417,11 +443,16 @@ async function handleEvent(event) {
           const amountInSheet = targetRow.get("數量")
           const isCollection =
             targetRow.get("收款(✅/❌)") === "✅" ? true : false
+          const priceInSheet = targetRow.get("價格")
+          const commentsInSheet = targetRow.get("備註")
 
-          const replyMessage = `${displayName} 的 ${productName} 訂單 :\n🛒 ${formatedMessage}+${amountInSheet}`
-          // const replyMessage = `${displayName} :\n🛒 ${formatedMessage}+${amountInSheet} ${
-          //   isCollection ? "已付款" : "未付款"
-          // }。`
+          const replyMessage = commentsInSheet
+            ? `${displayName} 的 ${productName} 訂單 :\n🛒 [${formatedMessage}]\t\t${
+                isCollection ? "已付款" : "未付款"
+              }\n\t\t商品 : ${productName}\n\t\t數量 : ${amountInSheet}\n\t\t價格 : ${priceInSheet}\n\t\t備註 : ${commentsInSheet}`
+            : `${displayName} 的 ${productName} 訂單 :\n🛒 [${formatedMessage}]\t\t${
+                isCollection ? "已付款" : "未付款"
+              }\n\t\t商品 : ${productName}\n\t\t數量 : ${amountInSheet}\n\t\t價格 : ${priceInSheet}`
 
           return client.replyMessage({
             replyToken,
@@ -452,17 +483,23 @@ async function handleEvent(event) {
           if (!existRow) continue
 
           const amountInSheet = existRow.get("數量")
+          const priceInSheet = existRow.get("價格")
           const isCollection =
             existRow.get("收款(✅/❌)") === "✅" ? true : false
+          const commentsInSheet = existRow.get("備註")
 
           const displayProductName =
             productName.length > 15
               ? `${productName.substring(0, 15)}...`
               : productName
 
-          result += `🛒 [${sheetTitle}] ${displayProductName}\n\t\t數量 : ${amountInSheet}\t\t${
-            isCollection ? "已付款" : "未付款"
-          }\n\n`
+          result += commentsInSheet
+            ? `🛒 [${sheetTitle}]\t\t${
+                isCollection ? "已付款" : "未付款"
+              }\n\t\t商品 : ${displayProductName}\n\t\t數量 : ${amountInSheet}\n\t\t價格 : ${priceInSheet}\n\t\t備註 : ${commentsInSheet}\n\n`
+            : `🛒 [${sheetTitle}]\t\t${
+                isCollection ? "已付款" : "未付款"
+              }\n\t\t商品 : ${displayProductName}\n\t\t數量 : ${amountInSheet}\n\t\t價格 : ${priceInSheet}\n\n`
         }
         let replyMessage = ""
 
