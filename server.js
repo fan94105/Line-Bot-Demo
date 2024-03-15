@@ -36,7 +36,7 @@ async function handleEvent(event) {
   const sourceType = event.source.type // 'user' | 'group'
   const date = new Date(event.timestamp).toLocaleDateString()
   // const groupId = event.source?.groupId
-  const groupId = "C1bc0a1b1d91033d5e49aa9b3ca55b751"
+  const groupId = process.env.LINE_GROUP_ID
   const userId = event.source.userId
   const replyToken = event.replyToken
   try {
@@ -60,7 +60,7 @@ async function handleEvent(event) {
     const { displayName } = profile
 
     // 判斷是否為管理員
-    const isOwner = true
+    const isManager = false
 
     async function createNewSheet(title, productName, unitPrice, description) {
       // 確認 sheet 是否已存在
@@ -94,7 +94,7 @@ async function handleEvent(event) {
     //////////////////////////////////////////////////////////////
 
     // 管理員操作
-    if (isOwner && sourceType === "group") {
+    if (isManager && sourceType === "user") {
       // 創建新訂單 "create-[sheetTitle]-[productName]-[unitPrice]-[description]"
       if (userMessage.startsWith("create")) {
         const re =
@@ -110,20 +110,11 @@ async function handleEvent(event) {
 
         await createNewSheet(sheetTitle, productName, unitPrice, description)
 
-        const replyMessage = `📢 ${productName} 開始登記啦!\n\n${description}\n\n每組價格 ${unitPrice} 元\n\n需要的夥伴請輸入:\t『 ${sheetTitle}+1 』`
+        const replyMessage = `📢 【 ${productName} 】開始登記啦~ 🎉\n\n${description}\n\n😍群組優惠每組價格 💲${unitPrice} 😍\n\n需要的夥伴請輸入:\t『 ${sheetTitle}+1 』`
 
         // 發送群組訊息
-        // return client.pushMessage({
-        //   to: groupId,
-        //   messages: [
-        //     {
-        //       type: "text",
-        //       text: replyMessage,
-        //     },
-        //   ],
-        // })
-        return client.replyMessage({
-          replyToken,
+        return client.pushMessage({
+          to: groupId,
           messages: [
             {
               type: "text",
@@ -131,6 +122,15 @@ async function handleEvent(event) {
             },
           ],
         })
+        // return client.replyMessage({
+        //   replyToken,
+        //   messages: [
+        //     {
+        //       type: "text",
+        //       text: replyMessage,
+        //     },
+        //   ],
+        // })
       }
 
       // 切換訂單狀態 "toggle-[sheetTitle]"
@@ -204,7 +204,8 @@ async function handleEvent(event) {
 
           const amountInSheet = existRow.get("數量")
           const priceInSheet = existRow.get("價格")
-          const isCollection = existRow.get("收款") === "✅" ? true : false
+          const isCollection =
+            existRow.get("收款(✅/❌)") === "✅" ? true : false
 
           const displayProductName =
             productName.length > 15
@@ -223,6 +224,20 @@ async function handleEvent(event) {
           -2
         )}`
 
+        return client.replyMessage({
+          replyToken,
+          messages: [
+            {
+              type: "text",
+              text: replyMessage,
+            },
+          ],
+        })
+      }
+
+      // 指令提示 "指令"
+      if (userMessage.trim() === "指令") {
+        const replyMessage = `🤖 管理員指令 :\n創建訂單 :\n『create-訂單-產品-單價-描述』\n\n開啟/關閉訂單 :\n『toggle-訂單』\n\n查看特定顧客訂單 :\n『check-顧客』`
         return client.replyMessage({
           replyToken,
           messages: [
@@ -322,7 +337,7 @@ async function handleEvent(event) {
             id: userId,
             客戶名: displayName,
             數量: amount,
-            收款: "❌",
+            "收款(✅/❌)": "❌",
           })
 
           const newRowNumber = newRow.rowNumber
@@ -352,17 +367,22 @@ async function handleEvent(event) {
       // 查看特定訂單 "[sheetTitle]"
       const specificSheet = doc.sheetsByTitle[formatedMessage]
       if (specificSheet) {
+        await specificSheet.loadHeaderRow(1)
+        const infoRows = await specificSheet.getRows({ limit: 1 })
+
+        const productName = infoRows[0]?.get("商品名")
+
         await specificSheet.loadHeaderRow(4)
 
         const rows = await specificSheet.getRows({ limit: 30 })
 
-        if (isOwner) {
+        if (isManager) {
           let result = ""
           rows.forEach((row, i) => {
             if (!row) return
             const customer = row.get("客戶名")
             const amountInSheet = row.get("數量")
-            const isCollection = row.get("收款") === "✅" ? true : false
+            const isCollection = row.get("收款(✅/❌)") === "✅" ? true : false
 
             result += `${
               i < 9 ? `0${i + 1}` : i + 1
@@ -373,7 +393,7 @@ async function handleEvent(event) {
 
           if (result === "") result = "空空如也..."
 
-          const replyMessage = `${formatedMessage} 訂單 :\n${result.slice(
+          const replyMessage = `【${formatedMessage}】 ${productName} 訂單 :\n${result.slice(
             0,
             -1
           )}`
@@ -390,12 +410,15 @@ async function handleEvent(event) {
         } else {
           const targetRow = rows.find((row) => row.get("id") === userId)
           if (!targetRow)
-            throw new Error(`❗${displayName} : 沒有 ${formatedMessage} 訂單。`)
+            throw new Error(
+              `${displayName} 的 ${productName} 訂單 :\n🛒 ${formatedMessage}+0`
+            )
 
           const amountInSheet = targetRow.get("數量")
-          const isCollection = targetRow.get("收款") === "✅" ? true : false
+          const isCollection =
+            targetRow.get("收款(✅/❌)") === "✅" ? true : false
 
-          const replyMessage = `${displayName} :\n🛒 ${formatedMessage}+${amountInSheet}。`
+          const replyMessage = `${displayName} 的 ${productName} 訂單 :\n🛒 ${formatedMessage}+${amountInSheet}`
           // const replyMessage = `${displayName} :\n🛒 ${formatedMessage}+${amountInSheet} ${
           //   isCollection ? "已付款" : "未付款"
           // }。`
@@ -429,7 +452,8 @@ async function handleEvent(event) {
           if (!existRow) continue
 
           const amountInSheet = existRow.get("數量")
-          const isCollection = existRow.get("收款") === "✅" ? true : false
+          const isCollection =
+            existRow.get("收款(✅/❌)") === "✅" ? true : false
 
           const displayProductName =
             productName.length > 15
@@ -440,11 +464,28 @@ async function handleEvent(event) {
             isCollection ? "已付款" : "未付款"
           }\n\n`
         }
-        const replyMessage = `${displayName} 的所有訂單 :\n${result.slice(
-          0,
-          -2
-        )}`
+        let replyMessage = ""
 
+        if (result === "") {
+          replyMessage = `${displayName} 目前沒有任何訂單。`
+        } else {
+          replyMessage = `${displayName} 的所有訂單 :\n${result.slice(0, -2)}`
+        }
+
+        return client.replyMessage({
+          replyToken,
+          messages: [
+            {
+              type: "text",
+              text: replyMessage,
+            },
+          ],
+        })
+      }
+
+      // 指令提示 "指令"
+      if (formatedMessage === "指令") {
+        const replyMessage = `🤖 指令提示 :\n增加/減少訂單 :\n[訂單名稱]+[數量]，如"椰子油+1"。\n\n查看個人特定訂單 :\n[訂單名稱]，如"椰子油"。\n\n查看個人所有訂單 :\n"我的訂單"`
         return client.replyMessage({
           replyToken,
           messages: [
